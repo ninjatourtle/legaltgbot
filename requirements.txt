@@ -1,0 +1,9 @@
+aiogram==3.3.0
+SQLAlchemy==2.0.0
+aiosqlite
+pdfplumber
+python-docx
+openai>=1.0.0
+pydantic-settings
+python-dotenv
+reportlab>=3.6.12
