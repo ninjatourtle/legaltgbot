@@ -19,6 +19,8 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=settings.TELEGRAM_TOKEN, parse_mode="HTML")
 dp = Dispatcher()
 
+PAGE_SIZE = 5
+
 async def on_startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -34,6 +36,25 @@ async def get_or_create_user(session: AsyncSessionLocal, tg_id: int) -> User:
         await session.commit()
         await session.refresh(user)
     return user
+
+async def fetch_user_docs(tg_id: int):
+    async with AsyncSessionLocal() as session:
+        user_res = await session.execute(
+            select(User).where(User.telegram_id == tg_id)
+        )
+        user = user_res.scalars().first()
+        if not user:
+            return []
+        docs_res = await session.execute(
+            select(Document)
+            .where(
+                Document.user_id == user.id,
+                Document.is_paid == True,
+                Document.analysis.is_not(None),
+            )
+            .order_by(Document.analyzed_at.desc())
+        )
+        return docs_res.scalars().all()
 
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message):
@@ -132,38 +153,70 @@ async def handle_paid(callback: types.CallbackQuery):
     )
     os.remove(pdf_path)
 
-@dp.callback_query(F.data == "show_history")
-async def show_history(callback: types.CallbackQuery):
-    async with AsyncSessionLocal() as session:
-        user_res = await session.execute(
-            select(User).where(User.telegram_id == callback.from_user.id)
-        )
-        user = user_res.scalars().first()
-        if not user:
-            return await callback.answer("У вас нет истории анализов.", show_alert=True)
-        docs_res = await session.execute(
-            select(Document)
-            .where(
-                Document.user_id == user.id,
-                Document.is_paid == True,
-                Document.analysis.is_not(None)
-            )
-            .order_by(Document.analyzed_at.desc())
-        )
-        docs = docs_res.scalars().all()
-
+async def _send_history_page(callback: types.CallbackQuery, page: int, *, new_message: bool = False):
+    docs = await fetch_user_docs(callback.from_user.id)
     if not docs:
         return await callback.answer("У вас нет истории анализов.", show_alert=True)
 
-    lines = []
-    for doc in docs:
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    slice_docs = docs[start:end]
+
+    kb_rows = []
+    for doc in slice_docs:
         date = doc.analyzed_at.strftime("%Y-%m-%d %H:%M")
-        snippet = doc.analysis["result"][:100].replace("\n"," ")
-        lines.append(f"{date} — #{doc.id}: {snippet}...")
-    await callback.message.answer(
-        "📜 <b>История анализов:</b>\n" + "\n".join(lines),
-        parse_mode="HTML"
+        kb_rows.append([
+            InlineKeyboardButton(
+                text=f"{date} #{doc.id}",
+                callback_data=f"history_doc:{doc.id}"
+            )
+        ])
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("« Назад", callback_data=f"history_page:{page-1}"))
+    if end < len(docs):
+        nav_buttons.append(InlineKeyboardButton("Вперёд »", callback_data=f"history_page:{page+1}"))
+    if nav_buttons:
+        kb_rows.append(nav_buttons)
+
+    markup = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    text = "📜 <b>История анализов:</b>"
+
+    if new_message:
+        await callback.message.answer(text, reply_markup=markup)
+    else:
+        await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "show_history")
+async def show_history(callback: types.CallbackQuery):
+    await _send_history_page(callback, 0, new_message=True)
+
+
+@dp.callback_query(F.data.startswith("history_page:"))
+async def paginate_history(callback: types.CallbackQuery):
+    page = int(callback.data.split(":", 1)[1])
+    await _send_history_page(callback, page)
+
+
+@dp.callback_query(F.data.startswith("history_doc:"))
+async def send_history_doc(callback: types.CallbackQuery):
+    doc_id = int(callback.data.split(":", 1)[1])
+    async with AsyncSessionLocal() as session:
+        doc = await session.get(Document, doc_id)
+        if not doc or doc.user.telegram_id != callback.from_user.id:
+            return await callback.answer("Документ не найден.", show_alert=True)
+
+    await callback.answer("📑 Формирую отчёт…")
+    pdf_path = f"report_{doc_id}.pdf"
+    generate_report_pdf(doc, doc.analysis, pdf_path)
+    await callback.message.answer_document(
+        FSInputFile(pdf_path, filename=f"report_{doc_id}.pdf"),
+        caption="📄 Полный отчёт по анализу"
     )
+    os.remove(pdf_path)
 
 if __name__ == "__main__":
     logging.info("🚀 Initializing database…")
