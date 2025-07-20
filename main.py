@@ -37,20 +37,25 @@ async def get_or_create_user(session: AsyncSessionLocal, tg_id: int) -> User:
 
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message):
-    await msg.answer(
-        "👋 Привет! Я — бот для анализа договоров.\n"
-        "Отправь PDF или DOCX, я посчитаю страницы и предложу кнопку «Я оплатил» для тестирования.\n"
-        "После нажатия кнопки выполню анализ."
-    )
-    history_kb = InlineKeyboardMarkup(
+    kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="История анализов", callback_data="show_history")]
+            [
+                InlineKeyboardButton(text="Анализировать договор", callback_data="request_file"),
+                InlineKeyboardButton(text="История", callback_data="show_history"),
+            ]
         ]
     )
     await msg.answer(
-        "Нажмите кнопку «История анализов» для просмотра списка ваших отчётов.",
-        reply_markup=history_kb
+        "👋 Привет! Я — бот для анализа договоров. Выберите действие:",
+        reply_markup=kb,
     )
+
+@dp.callback_query(F.data == "request_file")
+async def request_file(callback: types.CallbackQuery):
+    await callback.message.answer(
+        "📂 Пришлите файл договора в формате PDF или DOCX."
+    )
+    await callback.answer()
 
 @dp.message(F.text)
 async def echo(msg: types.Message):
