@@ -67,15 +67,18 @@ async def handle_document(msg: types.Message):
         user = await get_or_create_user(session, msg.from_user.id)
         file = await bot.get_file(msg.document.file_id)
         ext = msg.document.file_name.rsplit('.', 1)[-1].lower()
+        if ext not in ("pdf", "docx", "doc"):
+            return await msg.answer("❌ Только PDF и DOCX.")
+
+        await msg.answer("⏳ Идёт обработка текста, пожалуйста, подождите…")
+
         path = f"downloads/{msg.document.file_unique_id}.{ext}"
         await bot.download_file(file.file_path, destination=path)
 
         if ext == "pdf":
             text, page_count = await parse_pdf(path)
-        elif ext in ("docx", "doc"):
-            text, page_count = await parse_docx(path)
         else:
-            return await msg.answer("❌ Только PDF и DOCX.")
+            text, page_count = await parse_docx(path)
 
         if not text.strip():
             return await msg.answer(
@@ -112,6 +115,7 @@ async def handle_paid(callback: types.CallbackQuery):
             return await callback.answer("Документ не найден или уже обработан.")
         doc.is_paid = True
         await callback.answer("Оплата отмечена, анализирую…")
+        await callback.message.answer("🧠 Идёт анализ договора, пожалуйста, подождите…")
         result = await analyze_contract(doc.extracted_text)
         doc.analysis = {"result": result}
         doc.analyzed_at = datetime.datetime.utcnow()
@@ -119,6 +123,7 @@ async def handle_paid(callback: types.CallbackQuery):
         await session.commit()
 
     # Генерируем PDF-отчёт и отправляем его
+    await callback.message.answer("📝 Формирую PDF-отчёт…")
     pdf_path = f"report_{doc_id}.pdf"
     generate_report_pdf(doc, doc.analysis, pdf_path)
     await callback.message.answer_document(
