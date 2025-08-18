@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 import structlog
+from prometheus_fastapi_instrumentator import Instrumentator
 from .config import settings
 
 structlog.configure(
@@ -12,6 +13,9 @@ structlog.configure(
 logger = structlog.get_logger()
 
 app = FastAPI(title=settings.app_name)
+
+Instrumentator().instrument(app).expose(app)
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:

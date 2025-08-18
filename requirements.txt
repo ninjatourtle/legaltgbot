@@ -13,3 +13,4 @@ structlog
 celery
 alembic
 idna
+prometheus-fastapi-instrumentator
